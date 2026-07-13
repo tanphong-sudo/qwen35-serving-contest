@@ -621,6 +621,41 @@ Bài học:
 - Rollback byte-identical về best 65.06. Phase tiếp theo phải giảm duplicate prefix/prefill
   compute trên base, không tiếp tục đổi chỗ latency bằng scheduler.
 
+## Lượt 16 — CUDA Graph Exact Cohort 20 — Chờ Kết Quả
+
+Prefix-coalescing research bị dừng trước build. vLLM v0.24 đã đặt
+`max_num_partial_prefills=1`, không hỗ trợ concurrent partial prefill, schedule RUNNING trước
+WAITING và có Marconi-style hybrid APC. Với budget 2048, follower không chạy song song qua
+common prefix theo cách hypothesis cũ giả định; custom KV/GDN coalescer sẽ trùng logic sẵn có.
+
+Candidate mới giữ nguyên best 65.06 và chỉ thêm:
+
+```text
+--compilation-config={"cudagraph_capture_sizes":[1,2,4,8,16,20,24,32,40,48,56,60,64,72,80,88,96,100,104,112,120,128,136,144,152,160,168,176,184,192,200,208,216,224,232,240,248,256,272,288,304,320,336,352,368,384,400,416,432,448,464,480,496,512]}
+```
+
+Artifact chờ nộp:
+
+```text
+configs/vllm/submission-v024-cudagraph-cohort20.compose.yml
+SHA-256 455add01996d671ef26d895ba862a934b4e6841210df263bcc487621785e4a8b
+```
+
+Evidence trước portal:
+
+- Default v0.24 sinh 51 capture sizes đến 512: bước 8 dưới 256, bước 16 từ 256.
+- Decode batch 20/60/100 bị pad thành 24/64/104; workload đến theo cohort 20.
+- Candidate giữ toàn bộ 51 default graph và chỉ thêm 20/60/100, tổng 54 graph.
+- Mọi coverage 128–512 cho prefill tail/mixed batch được giữ nguyên; không đánh đổi TTFT để
+  tối ưu decode.
+- Projection bảo thủ với 25% TBT nhạy theo graph padding: 26 -> 24.92 ms và median-score
+  proxy +3.39 điểm. Với 50%: 23.83 ms và proxy +6.96 điểm.
+- Renderer deterministic, `docker compose config -q` pass và candidate chỉ khác base một
+  command argument.
+
+Đây là một test kernel-shape duy nhất, không ghép scheduler, MTP hay memory flag. Nếu TBT
+không đổi, đóng branch thay vì sweep step/max khác.
+
 ## Candidate Cascade Attention — Hủy Trước Khi Nộp
 
 Candidate từng dự kiến thêm đúng một flag vào bản 17.80:
