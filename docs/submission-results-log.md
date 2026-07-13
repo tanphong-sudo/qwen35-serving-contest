@@ -621,7 +621,7 @@ Bài học:
 - Rollback byte-identical về best 65.06. Phase tiếp theo phải giảm duplicate prefix/prefill
   compute trên base, không tiếp tục đổi chỗ latency bằng scheduler.
 
-## Lượt 16 — CUDA Graph Exact Cohort 20 — Chờ Kết Quả
+## Lượt 16 — CUDA Graph Exact Cohort 20 — Score 64.38
 
 Prefix-coalescing research bị dừng trước build. vLLM v0.24 đã đặt
 `max_num_partial_prefills=1`, không hỗ trợ concurrent partial prefill, schedule RUNNING trước
@@ -634,10 +634,10 @@ Candidate mới giữ nguyên best 65.06 và chỉ thêm:
 --compilation-config={"cudagraph_capture_sizes":[1,2,4,8,16,20,24,32,40,48,56,60,64,72,80,88,96,100,104,112,120,128,136,144,152,160,168,176,184,192,200,208,216,224,232,240,248,256,272,288,304,320,336,352,368,384,400,416,432,448,464,480,496,512]}
 ```
 
-Artifact chờ nộp:
+Compose đã nộp và snapshot chính xác:
 
 ```text
-configs/vllm/submission-v024-cudagraph-cohort20.compose.yml
+configs/vllm/submission-score-64_38.compose.yml
 SHA-256 455add01996d671ef26d895ba862a934b4e6841210df263bcc487621785e4a8b
 ```
 
@@ -653,8 +653,28 @@ Evidence trước portal:
 - Renderer deterministic, `docker compose config -q` pass và candidate chỉ khác base một
   command argument.
 
-Đây là một test kernel-shape duy nhất, không ghép scheduler, MTP hay memory flag. Nếu TBT
-không đổi, đóng branch thay vì sweep step/max khác.
+| Metric | 65.06 | 64.38 | Delta |
+| --- | ---: | ---: | ---: |
+| Score | 65.06 | **64.38** | -0.68 điểm / -1.05% |
+| ERC | 1.000000 | 1.000000 | giữ nguyên |
+| Passed SLO | 120 | 120 | giữ nguyên |
+| Failed | 0 | 0 | giữ nguyên |
+| Accuracy drop | 0 | 0 | giữ nguyên |
+| Penalty | 1 | 1 | giữ nguyên |
+| TTFT p50 | 266 | **264 ms** | tốt hơn 2 ms / 0.75% |
+| TTFT p95 | 1256 | **1233 ms** | tốt hơn 23 ms / 1.83% |
+| TBT median | 26 | **27 ms** | xấu hơn 1 ms / 3.85% |
+| Warmup count | 0 | 0 | giữ nguyên |
+
+Bài học:
+
+- Reliability và TTFT giữ nguyên, nên candidate không gây boot/memory/admission regression.
+- Exact graph sizes chỉ cải thiện TTFT trong noise nhưng không giảm decode cost; TBT còn xấu
+  1 ms và score mất 0.68.
+- Padding 20->24, 60->64, 100->104 không phải bottleneck của workload. Không thử thêm exact
+  size, fine-grained interactivity graphs hoặc biến thể max capture khác.
+- Rollback byte-identical về best 65.06. MTP cũng bị dừng trước portal vì upstream định vị
+  nó cho low concurrency và cảnh báo throughput giảm dưới tải, ngược workload burst hiện tại.
 
 ## Candidate Cascade Attention — Hủy Trước Khi Nộp
 

@@ -66,3 +66,14 @@ def test_cli_writes_candidate(tmp_path):
     assert output.read_text() == render_cudagraph_compose(
         512, cohort_size=20, max_batch_size=120
     )
+
+
+def test_cli_requires_explicit_output():
+    result = subprocess.run(
+        [sys.executable, "scripts/render_cudagraph_submission.py"],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "--output" in result.stderr

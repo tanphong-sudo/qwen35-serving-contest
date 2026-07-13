@@ -35,7 +35,7 @@ def render_adaptive_compose(image: str) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--image", required=True)
-    parser.add_argument("--output", type=Path, default=Path("docker-compose.yml"))
+    parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     args.output.write_text(render_adaptive_compose(args.image))
 

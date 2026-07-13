@@ -1,3 +1,5 @@
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -27,3 +29,20 @@ def test_rejects_mutable_image_tag():
 
 def test_base_compose_exists():
     assert Path("configs/vllm/submission-score-65_06.compose.yml").is_file()
+
+
+def test_cli_requires_explicit_output():
+    image = "ghcr.io/example/qwen35-adaptive@sha256:" + "a" * 64
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/render_adaptive_submission.py",
+            "--image",
+            image,
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "--output" in result.stderr

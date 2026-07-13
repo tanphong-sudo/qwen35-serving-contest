@@ -49,7 +49,7 @@ def main() -> None:
     parser.add_argument("--max-capture-size", type=int, default=512)
     parser.add_argument("--cohort-size", type=int, default=20)
     parser.add_argument("--max-batch-size", type=int, default=120)
-    parser.add_argument("--output", type=Path, default=Path("docker-compose.yml"))
+    parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     args.output.write_text(
         render_cudagraph_compose(
