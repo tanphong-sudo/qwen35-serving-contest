@@ -15,8 +15,15 @@ docker build \
   -t qwen35-adaptive:v0.24.0 .
 ```
 
-The submission image must be pushed to a public registry and pinned by digest before a
-compose candidate is created. The required engine flag is:
+The validated submission image is:
+
+```text
+ghcr.io/tanphong-sudo/qwen35-adaptive@sha256:8a18315745a39d54085e1d99bfbb7e5ae55e5b6fb320132c7261abfa4dfc18db
+```
+
+GitHub Actions run `29231204106` built it for `linux/amd64`, smoke-imported the scheduler,
+and pushed it to GHCR. An anonymous registry manifest request returned HTTP 200 with the
+same digest. The required engine flag is:
 
 ```text
 --scheduler-cls=qwen35_adaptive.scheduler.CompletionCohortAsyncScheduler
@@ -34,5 +41,5 @@ python3 scripts/render_adaptive_submission.py \
   --image ghcr.io/OWNER/qwen35-adaptive@sha256:DIGEST
 ```
 
-GHCR packages may be private after the first push. Set the package visibility to public and
-verify an anonymous manifest inspection before using the digest in a contest submission.
+The current package is public. Repeat the build, import smoke test, public visibility check,
+and anonymous manifest inspection whenever scheduler code or the base image changes.

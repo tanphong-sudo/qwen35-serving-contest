@@ -113,4 +113,4 @@ scripts/generate_vllm_sweep.py --profile core
 2. Snapshot every scored root compose before editing it.
 3. Keep offline env and prefix caching in all candidates.
 4. Roll back on failures or accuracy penalty.
-5. Promote only when final portal score exceeds 17.80.
+5. Promote only when final portal score improves the confirmed best by at least 1 point.

@@ -569,6 +569,37 @@ Bài học:
 - Phase kế tiếp là custom adaptive scheduler: admit/prefill burst mới sớm để giữ TTFT, nhưng
   điều tiết running decode theo queue age/service time thay vì hard cap tĩnh.
 
+## Lượt 15 — Custom Adaptive Scheduler Cohort 20 — Chờ Kết Quả
+
+Candidate giữ nguyên toàn bộ best 65.06 và chỉ đổi ba điểm liên kết thành một package runtime:
+
+```text
+image ghcr.io/tanphong-sudo/qwen35-adaptive@sha256:8a18315745a39d54085e1d99bfbb7e5ae55e5b6fb320132c7261abfa4dfc18db
+QWEN35_DECODE_WINDOW=20
+--scheduler-cls=qwen35_adaptive.scheduler.CompletionCohortAsyncScheduler
+```
+
+Artifact chờ nộp:
+
+```text
+configs/vllm/submission-adaptive-cohort20.compose.yml
+SHA-256 54e27c29e647bc5b826da907d45572b90bda9faac90c1c544ce218a21e99e29e
+```
+
+Gate đã qua trước portal:
+
+- 29 unit tests pass và `docker compose config -q` pass.
+- GitHub Actions run `29231204106` build đúng `linux/amd64` từ base vLLM v0.24 pinned.
+- Scheduler import smoke test pass trong exact image.
+- Exact `schedule(throttle_prefills=False)` signature và các field request dùng bởi policy đã
+  đối chiếu với source vLLM `v0.24.0`.
+- Anonymous GHCR manifest GET trả HTTP 200, đúng digest; image config là Linux amd64.
+
+Hypothesis: burst mới vẫn được prefill và nhận first token sớm, trong khi tối đa 20 mature
+decoder gần hoàn thành được chạy liên tục. Mục tiêu là giữ ERC 1 và TTFT gần base nhưng kéo
+TBT từ 26 ms về 20–23 ms. Đây là một phép đo scheduler duy nhất; không thêm flag khác trước
+khi portal trả metric.
+
 ## Candidate Cascade Attention — Hủy Trước Khi Nộp
 
 Candidate từng dự kiến thêm đúng một flag vào bản 17.80:
