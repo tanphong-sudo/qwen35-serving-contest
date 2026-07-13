@@ -1,0 +1,37 @@
+services:
+  model:
+    image: vllm/vllm-openai@sha256:3de11aaf1d2aa1c6245a93e9279cc10af6d0b9f5eb3b34704fbd099a8ac42c7d
+    environment:
+      VLLM_NO_USAGE_STATS: "1"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      PYTHONUNBUFFERED: "1"
+    entrypoint:
+      - python3
+      - -m
+      - vllm.entrypoints.openai.api_server
+    command:
+      - --model=/model
+      - --served-model-name=Qwen3.5-2B
+      - --host=0.0.0.0
+      - --port=8000
+      - --max-model-len=32768
+      - --max-num-batched-tokens=2048
+      - --max-num-seqs=20
+      - --gpu-memory-utilization=0.95
+      - --tensor-parallel-size=1
+      - --enable-prefix-caching
+      - --quantization=fp8
+      - --mamba-ssm-cache-dtype=bfloat16
+      - --language-model-only
+      - --disable-uvicorn-access-log
+    ports:
+      - "8000:8000"
+    shm_size: "2g"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

@@ -1,0 +1,9 @@
+FROM vllm/vllm-openai:v0.22.1
+
+ENV VLLM_NO_USAGE_STATS=1 \
+    HF_HUB_ENABLE_HF_TRANSFER=1 \
+    PYTHONUNBUFFERED=1
+
+# Keep the entrypoint in docker-compose.yml aligned with the contest sample:
+# python3 -m vllm.entrypoints.openai.api_server
+

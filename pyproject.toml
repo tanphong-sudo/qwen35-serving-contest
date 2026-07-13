@@ -1,0 +1,10 @@
+[project]
+name = "qwen35-serving-contest"
+version = "0.1.0"
+description = "Trace analysis, scoring, and replay tools for the Qwen3.5-2B serving contest"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+

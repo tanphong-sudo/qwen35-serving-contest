@@ -1,0 +1,27 @@
+services:
+  model:
+    image: lmsysorg/sglang:latest-runtime
+    entrypoint:
+      - python3
+      - -m
+      - sglang.launch_server
+    command:
+      - --model-path=/model
+      - --served-model-name=Qwen3.5-2B
+      - --host=0.0.0.0
+      - --port=8000
+      - --context-length=65536
+      - --mem-fraction-static=0.88
+      - --chunked-prefill-size=8192
+      - --max-running-requests=32
+      - --trust-remote-code
+    ports:
+      - "8000:8000"
+    shm_size: "2g"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

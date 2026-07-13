@@ -1,0 +1,33 @@
+services:
+  model:
+    image: lmsysorg/sglang@sha256:323c32e603d3cd3e35ce63101dd5334c662c2fe6bf403c6473a476b5599efce6
+    environment:
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      PYTHONUNBUFFERED: "1"
+    entrypoint:
+      - python3
+      - -m
+      - sglang.launch_server
+    command:
+      - --model-path=/model
+      - --served-model-name=Qwen3.5-2B
+      - --host=0.0.0.0
+      - --port=8000
+      - --context-length=32768
+      - --mem-fraction-static=0.90
+      - --chunked-prefill-size=2048
+      - --max-running-requests=20
+      - --schedule-policy=lpm
+      - --quantization=fp8
+      - --mamba-ssm-dtype=bfloat16
+    ports:
+      - "8000:8000"
+    shm_size: "2g"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

@@ -1,0 +1,12 @@
+.DS_Store
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+results/*.jsonl
+results/*.log
+work/*
+!work/.gitkeep
+models/
+hf-cache/
+

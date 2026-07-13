@@ -1,0 +1,6 @@
+FROM vllm/vllm-openai@sha256:3de11aaf1d2aa1c6245a93e9279cc10af6d0b9f5eb3b34704fbd099a8ac42c7d
+
+COPY custom_runtime/qwen35_adaptive /opt/qwen35-adaptive/qwen35_adaptive
+
+ENV PYTHONPATH=/opt/qwen35-adaptive
+ENV QWEN35_DECODE_WINDOW=20
