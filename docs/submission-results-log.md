@@ -676,6 +676,42 @@ Bài học:
 - Rollback byte-identical về best 65.06. MTP cũng bị dừng trước portal vì upstream định vị
   nó cho low concurrency và cảnh báo throughput giảm dưới tải, ngược workload burst hiện tại.
 
+## Lượt 17 — vLLM 0.25.0 CUDA 12.9 Version A/B — Chờ Kết Quả
+
+Candidate giữ byte-identical best 65.06 ngoài đúng image digest:
+
+```text
+vllm/vllm-openai@sha256:1a62fd4ad863259ec206e0d2b9fb24eb5d67b4deff87a1b2ae7889fc7f9ab23e
+```
+
+Artifact chờ nộp:
+
+```text
+configs/vllm/submission-v025-upgrade.compose.yml
+SHA-256 00a1deac0def9ce1be9e4a5e6bea7d7348582f0a7730e9aae04774c022460ac1
+```
+
+Evidence trước portal:
+
+- Image là official amd64 manifest của tag `v0.25.0-cu129-ubuntu2404`, CUDA 12.9.1, build
+  commit `dd10e03f95f94edbea1975c67ace3a35ec9a8a40`, compressed 11.74 GB.
+- Image hiện tại là v0.24.0 CUDA 12.9.1 build commit
+  `ee0da84ab9e04ac7610e28580af62c365e898389`, compressed 12.14 GB. Candidate mới nhỏ hơn
+  khoảng 3.3%, nên không tăng pull-size risk.
+- v0.25 chuyển dense models sang Model Runner V2 và chứa Qwen3.5 hybrid
+  `mamba_cache_mode=align` support, bỏ per-step state pre-copy bằng src/dst state indices.
+- Upstream Qwen3.5 prefix-repetition benchmark trên H20, common prefix 4096, concurrency 16:
+  v2 align so với v1 align cải thiện request throughput 2.90 -> 3.09 req/s, TPOT
+  10.33 -> 9.68 ms, ITL 21.32 -> 19.68 ms và TTFT 174.91 -> 174.29 ms.
+- Áp đúng TPOT ratio 0.9371 lên TBT 26 ms cho projection 24.36 ms và median-score proxy
+  +5.19 điểm, tương đương khoảng 70.25 nếu distribution khác giữ nguyên. Conservative 2%
+  TBT gain vẫn cho proxy +1.60 và vượt promote threshold 66.06.
+- Candidate chỉ đổi image; budget 2048, BF16 GDN state, FP8 weights, language-model-only,
+  prefix caching và mọi reliability flag đều giữ nguyên.
+
+Đây là version A/B, không ghép tuning. Nếu boot fail, accuracy/penalty hỏng hoặc score dưới
+65.06 thì rollback ngay. Nếu thắng, mới audit lại v0.25 execution path trước candidate sau.
+
 ## Candidate Cascade Attention — Hủy Trước Khi Nộp
 
 Candidate từng dự kiến thêm đúng một flag vào bản 17.80:
