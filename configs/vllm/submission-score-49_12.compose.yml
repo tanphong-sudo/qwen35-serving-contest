@@ -1,11 +1,12 @@
 services:
   model:
-    image: vllm/vllm-openai@sha256:3de11aaf1d2aa1c6245a93e9279cc10af6d0b9f5eb3b34704fbd099a8ac42c7d
+    image: ghcr.io/tanphong-sudo/qwen35-adaptive@sha256:8a18315745a39d54085e1d99bfbb7e5ae55e5b6fb320132c7261abfa4dfc18db
     environment:
       VLLM_NO_USAGE_STATS: "1"
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
       PYTHONUNBUFFERED: "1"
+      QWEN35_DECODE_WINDOW: "20"
     entrypoint:
       - python3
       - -m
@@ -17,6 +18,7 @@ services:
       - --port=8000
       - --max-model-len=32768
       - --max-num-batched-tokens=2048
+      - --scheduler-cls=qwen35_adaptive.scheduler.CompletionCohortAsyncScheduler
       - --gpu-memory-utilization=0.95
       - --tensor-parallel-size=1
       - --enable-prefix-caching

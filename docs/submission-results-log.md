@@ -569,7 +569,7 @@ Bài học:
 - Phase kế tiếp là custom adaptive scheduler: admit/prefill burst mới sớm để giữ TTFT, nhưng
   điều tiết running decode theo queue age/service time thay vì hard cap tĩnh.
 
-## Lượt 15 — Custom Adaptive Scheduler Cohort 20 — Chờ Kết Quả
+## Lượt 15 — Custom Adaptive Scheduler Cohort 20 — Score 49.12
 
 Candidate giữ nguyên toàn bộ best 65.06 và chỉ đổi ba điểm liên kết thành một package runtime:
 
@@ -579,10 +579,10 @@ QWEN35_DECODE_WINDOW=20
 --scheduler-cls=qwen35_adaptive.scheduler.CompletionCohortAsyncScheduler
 ```
 
-Artifact chờ nộp:
+Compose đã nộp và snapshot chính xác:
 
 ```text
-configs/vllm/submission-adaptive-cohort20.compose.yml
+configs/vllm/submission-score-49_12.compose.yml
 SHA-256 54e27c29e647bc5b826da907d45572b90bda9faac90c1c544ce218a21e99e29e
 ```
 
@@ -595,10 +595,31 @@ Gate đã qua trước portal:
   đối chiếu với source vLLM `v0.24.0`.
 - Anonymous GHCR manifest GET trả HTTP 200, đúng digest; image config là Linux amd64.
 
-Hypothesis: burst mới vẫn được prefill và nhận first token sớm, trong khi tối đa 20 mature
-decoder gần hoàn thành được chạy liên tục. Mục tiêu là giữ ERC 1 và TTFT gần base nhưng kéo
-TBT từ 26 ms về 20–23 ms. Đây là một phép đo scheduler duy nhất; không thêm flag khác trước
-khi portal trả metric.
+| Metric | 65.06 | 49.12 | Delta |
+| --- | ---: | ---: | ---: |
+| Score | 65.06 | **49.12** | -15.94 điểm / -24.50% |
+| ERC | 1.000000 | 1.000000 | giữ nguyên |
+| Passed SLO | 120 | 120 | giữ nguyên |
+| Failed | 0 | 0 | giữ nguyên |
+| Accuracy drop | 0 | 0 | giữ nguyên |
+| Penalty | 1 | 1 | giữ nguyên |
+| TTFT p50 | 266 | **371 ms** | xấu hơn 105 ms / 39.47% |
+| TTFT p95 | 1256 | **1212 ms** | tốt hơn 44 ms / 3.50% |
+| TBT median | 26 | **32 ms** | xấu hơn 6 ms / 23.08% |
+| Warmup count | 0 | 0 | giữ nguyên |
+
+Bài học:
+
+- Candidate giữ được reliability tuyệt đối và còn cải thiện TTFT tail nhẹ, nên thất bại không
+  nằm ở boot, accuracy hay queue catastrophe kiểu cap20.
+- Sau first token, request ngoài cohort bị trì hoãn decode. Queue delay không biến mất mà bị
+  chuyển từ TTFT sang khoảng cách giữa token; portal phản ánh trực tiếp bằng TBT 32 ms.
+- Completion cohort/time-slicing không giảm tổng compute của workload. Nó chỉ phân phối lại
+  decode slots và làm token cadence của nhiều request xấu hơn, trong khi p50 TTFT cũng tăng.
+- Không thử window 16/24/32 hoặc thay `current_step + 2` bằng defer khác: đó là sweep cùng một
+  frontier đã bị metric bác bỏ và không có log portal để biện minh thêm lượt.
+- Rollback byte-identical về best 65.06. Phase tiếp theo phải giảm duplicate prefix/prefill
+  compute trên base, không tiếp tục đổi chỗ latency bằng scheduler.
 
 ## Candidate Cascade Attention — Hủy Trước Khi Nộp
 

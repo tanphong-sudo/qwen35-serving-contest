@@ -1,4 +1,9 @@
-# Adaptive Scheduler Runtime
+# Adaptive Scheduler Runtime — Historical Rejected Experiment
+
+Portal score for completion cohort window 20 was 49.12 versus the 65.06 base. The policy
+kept ERC at 1 but increased TTFT p50 to 371 ms and TBT to 32 ms. Do not reuse this image or
+sweep nearby window/defer values for submission; the implementation remains only as an
+experiment record and as input to later scheduler research.
 
 This image keeps the contest-required vLLM module path and adds a custom
 `AsyncScheduler` implementation.
@@ -15,7 +20,7 @@ docker build \
   -t qwen35-adaptive:v0.24.0 .
 ```
 
-The validated submission image is:
+The exact historical image is:
 
 ```text
 ghcr.io/tanphong-sudo/qwen35-adaptive@sha256:8a18315745a39d54085e1d99bfbb7e5ae55e5b6fb320132c7261abfa4dfc18db
