@@ -29,8 +29,10 @@ same digest. The required engine flag is:
 --scheduler-cls=qwen35_adaptive.scheduler.CompletionCohortAsyncScheduler
 ```
 
-Do not place this image into the root compose until the module import and OpenAI endpoint
-smoke tests pass against the exact pinned image.
+Do not place this image into the root compose until the module import, exact vLLM API
+compatibility check, compose validation, public visibility check, and anonymous manifest
+inspection pass. A full GPU endpoint boot remains a portal gate because the hosted build
+runner has no compatible GPU.
 
 The manual GitHub Actions workflow `.github/workflows/build-adaptive-image.yml` builds the
 amd64 image, smoke-tests the scheduler import inside the exact vLLM base, pushes to GHCR and
