@@ -1,0 +1,61 @@
+name: Build vLLM 0.25 no-torchcodec image
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          docker system prune --all --force
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build exact amd64 image locally
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: custom_runtime/Dockerfile.v025-no-torchcodec
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ghcr.io/${{ github.repository_owner }}/qwen35-adaptive:v025-no-torchcodec-${{ github.sha }}
+
+      - name: Smoke test exact runner import path
+        run: |
+          image="ghcr.io/${{ github.repository_owner }}/qwen35-adaptive:v025-no-torchcodec-${{ github.sha }}"
+          docker run --rm --platform linux/amd64 \
+            --entrypoint python3 \
+            "$image" \
+            -c 'import importlib.util, torch, vllm, vllm.multimodal.video; assert importlib.util.find_spec("torchcodec") is None; assert torch.version.cuda == "12.9"; assert vllm.__version__ == "0.25.0"'
+          docker run --rm --platform linux/amd64 \
+            --entrypoint python3 \
+            "$image" \
+            -m vllm.entrypoints.openai.api_server --help >/dev/null
+
+      - name: Push smoke-tested image
+        run: |
+          image="ghcr.io/${{ github.repository_owner }}/qwen35-adaptive:v025-no-torchcodec-${{ github.sha }}"
+          docker push "$image"
+          docker inspect --format='{{index .RepoDigests 0}}' "$image" \
+            | tee v025-no-torchcodec-image-digest.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v025-no-torchcodec-image-digest
+          path: v025-no-torchcodec-image-digest.txt

@@ -1,0 +1,14 @@
+FROM vllm/vllm-openai@sha256:1a62fd4ad863259ec206e0d2b9fb24eb5d67b4deff87a1b2ae7889fc7f9ab23e
+
+RUN python3 -m pip uninstall -y torchcodec \
+    && python3 - <<'PY'
+import importlib.util
+
+import torch
+import vllm
+import vllm.multimodal.video
+
+assert importlib.util.find_spec("torchcodec") is None
+assert torch.version.cuda == "12.9"
+assert vllm.__version__ == "0.25.0"
+PY
