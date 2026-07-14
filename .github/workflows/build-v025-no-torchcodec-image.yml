@@ -43,10 +43,20 @@ jobs:
             --entrypoint python3 \
             "$image" \
             -c 'import importlib.util, torch, vllm, vllm.multimodal.video; assert importlib.util.find_spec("torchcodec") is None; assert torch.version.cuda == "12.9"; assert vllm.__version__ == "0.25.0"'
-          docker run --rm --platform linux/amd64 \
+          set +e
+          api_output="$(docker run --rm --platform linux/amd64 \
             --entrypoint python3 \
             "$image" \
-            -m vllm.entrypoints.openai.api_server --help >/dev/null
+            -m vllm.entrypoints.openai.api_server --help 2>&1)"
+          api_status=$?
+          set -e
+          printf '%s\n' "$api_output"
+          test "$api_status" -ne 0
+          grep -q 'Failed to infer device type' <<<"$api_output"
+          if grep -qi 'torchcodec' <<<"$api_output"; then
+            echo "torchcodec still blocks the API server import path" >&2
+            exit 1
+          fi
 
       - name: Push smoke-tested image
         run: |
