@@ -676,7 +676,7 @@ Bài học:
 - Rollback byte-identical về best 65.06. MTP cũng bị dừng trước portal vì upstream định vị
   nó cho low concurrency và cảnh báo throughput giảm dưới tải, ngược workload burst hiện tại.
 
-## Lượt 17 — vLLM 0.25.0 CUDA 12.9 Version A/B — Chờ Kết Quả
+## Lượt 17 — vLLM 0.25.0 CUDA 12.9 Version A/B — Boot Failed
 
 Candidate giữ byte-identical best 65.06 ngoài đúng image digest:
 
@@ -684,14 +684,27 @@ Candidate giữ byte-identical best 65.06 ngoài đúng image digest:
 vllm/vllm-openai@sha256:1a62fd4ad863259ec206e0d2b9fb24eb5d67b4deff87a1b2ae7889fc7f9ab23e
 ```
 
-Artifact chờ nộp:
+Artifact đã nộp:
 
 ```text
 configs/vllm/submission-v025-upgrade.compose.yml
 SHA-256 00a1deac0def9ce1be9e4a5e6bea7d7348582f0a7730e9aae04774c022460ac1
 ```
 
-Evidence trước portal:
+Kết quả portal ngày 14/07/2026:
+
+```text
+spawn contestant container: contestant pod failed
+container "inference" exited 1 before ready
+OSError: libnvrtc.so.13: cannot open shared object file
+OSError: Could not load torchcodec/libtorchcodec_core*.so
+```
+
+Không có score hoặc metric vì server chưa ready. Image metadata khai báo CUDA 12.9.1 nhưng
+dependency `torchcodec` được đóng gói với binary cần CUDA 13. v0.25 vừa thêm TorchCodec làm
+video backend; lỗi xảy ra trong import path trước khi API server phục vụ request.
+
+Evidence trước portal từng ủng hộ phép A/B:
 
 - Image là official amd64 manifest của tag `v0.25.0-cu129-ubuntu2404`, CUDA 12.9.1, build
   commit `dd10e03f95f94edbea1975c67ace3a35ec9a8a40`, compressed 11.74 GB.
@@ -709,8 +722,16 @@ Evidence trước portal:
 - Candidate chỉ đổi image; budget 2048, BF16 GDN state, FP8 weights, language-model-only,
   prefix caching và mọi reliability flag đều giữ nguyên.
 
-Đây là version A/B, không ghép tuning. Nếu boot fail, accuracy/penalty hỏng hoặc score dưới
-65.06 thì rollback ngay. Nếu thắng, mới audit lại v0.25 execution path trước candidate sau.
+Quyết định:
+
+- Rollback byte-identical về best 65.06, SHA-256
+  `e8acfc79438e87922f8fbbaf8b295b65cfc980ea4d523e8a3f85e315620c143b`.
+- Đóng digest v0.25 này hoàn toàn; không retry cùng artifact.
+- Không thêm symlink CUDA 13, không đổi `LD_LIBRARY_PATH`, không uninstall `torchcodec` trong
+  entrypoint và không chuyển sang CUDA 13 image nếu chưa boot local. Các cách đó tạo runtime
+  mới, có thể che lỗi import đầu tiên nhưng không chứng minh toàn bộ CUDA stack tương thích.
+- Chỉ mở lại version-upgrade khi upstream phát hành digest CUDA-consistent hoặc có custom
+  image đã kiểm tra `import torch`, `import vllm`, API boot, model load và smoke request.
 
 ## Candidate Cascade Attention — Hủy Trước Khi Nộp
 

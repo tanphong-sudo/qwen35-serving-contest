@@ -1,6 +1,6 @@
 services:
   model:
-    image: vllm/vllm-openai@sha256:1a62fd4ad863259ec206e0d2b9fb24eb5d67b4deff87a1b2ae7889fc7f9ab23e
+    image: vllm/vllm-openai@sha256:3de11aaf1d2aa1c6245a93e9279cc10af6d0b9f5eb3b34704fbd099a8ac42c7d
     environment:
       VLLM_NO_USAGE_STATS: "1"
       HF_HUB_OFFLINE: "1"
