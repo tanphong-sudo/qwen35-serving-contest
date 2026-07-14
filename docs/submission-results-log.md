@@ -728,10 +728,51 @@ Quyết định:
   `e8acfc79438e87922f8fbbaf8b295b65cfc980ea4d523e8a3f85e315620c143b`.
 - Đóng digest v0.25 này hoàn toàn; không retry cùng artifact.
 - Không thêm symlink CUDA 13, không đổi `LD_LIBRARY_PATH`, không uninstall `torchcodec` trong
-  entrypoint và không chuyển sang CUDA 13 image nếu chưa boot local. Các cách đó tạo runtime
-  mới, có thể che lỗi import đầu tiên nhưng không chứng minh toàn bộ CUDA stack tương thích.
+  entrypoint và không chuyển sang CUDA 13 image. Runner có thể override entrypoint; mọi repair
+  phải nằm trong immutable image và qua import smoke trước khi nộp.
 - Chỉ mở lại version-upgrade khi upstream phát hành digest CUDA-consistent hoặc có custom
-  image đã kiểm tra `import torch`, `import vllm`, API boot, model load và smoke request.
+  image đã kiểm tra dependency/import path bằng exact amd64 build. Hosted CI không có H200,
+  nên model load và GPU endpoint ready vẫn là deployment gate cuối của portal.
+
+## Lượt 18 — vLLM 0.25.0 Không TorchCodec — Sẵn Sàng Nộp
+
+Candidate mới không nộp lại rollback 65.06. Nó giữ toàn bộ v0.25 performance path và sửa
+đúng deployment blocker của lượt 17 trong immutable image:
+
+```text
+FROM vllm/vllm-openai@sha256:1a62fd4ad863259ec206e0d2b9fb24eb5d67b4deff87a1b2ae7889fc7f9ab23e
+RUN python3 -m pip uninstall -y torchcodec
+```
+
+Image đã build và push:
+
+```text
+ghcr.io/tanphong-sudo/qwen35-adaptive@sha256:a80e8468a978aba2e39ebb3dfa18d858fc3af3cefa17619736cd2852947c7c11
+```
+
+Artifact nộp:
+
+```text
+configs/vllm/submission-v025-no-torchcodec.compose.yml
+SHA-256 518983e99fa58b3302884598627f7a85853a7b024cfe8214be7db71e2429d491
+```
+
+Validation package:
+
+- GitHub Actions run `29310933688`, commit `71b4215`, build exact `linux/amd64` thành công.
+- Build-time import xác nhận `torchcodec` không còn, `torch.version.cuda == "12.9"`,
+  `vllm.__version__ == "0.25.0"` và `vllm.multimodal.video` import sạch.
+- Smoke chạy đúng `python3 -m vllm.entrypoints.openai.api_server --help`; hosted runner đi
+  qua TorchCodec import path và chỉ dừng tại device inference vì không có GPU. Gate fail nếu
+  output còn chuỗi `torchcodec`.
+- Image chỉ thêm một repair layer khoảng 30.3 MB compressed; total manifest khoảng 11.765 GB.
+- Anonymous manifest inspection trả đúng digest, platform `linux/amd64`, CUDA 12.9.1.
+- Compose byte-identical lượt 17 ngoài image digest; budget 2048, FP8, BF16 GDN state,
+  language-model-only, prefix caching và offline contract không đổi.
+
+Expected metric signature giữ nguyên hypothesis ban đầu: boot sạch, ERC 1, 120/120 SLO,
+TBT mục tiêu 24–25 ms và TTFT không regression lớn. Promote nếu score >=66.06; nếu vẫn
+boot fail thì đóng toàn bộ v0.25 branch, không tạo repair thứ ba.
 
 ## Candidate Cascade Attention — Hủy Trước Khi Nộp
 
