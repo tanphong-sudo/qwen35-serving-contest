@@ -1,439 +1,182 @@
-# Finding Kỹ Thuật Hiện Tại
-
-Tài liệu này lưu mô hình kỹ thuật hiện tại và thứ tự experiment. Ground truth metric nằm
-trong `submission-results-log.md`.
-
-## 1. Ground Truth Của Base 65.06
-
-Best confirmed hiện tại là vLLM `v0.24.0` với scheduler token budget 2048. Snapshot rollback:
-
-```text
-configs/vllm/submission-score-65_06.compose.yml
-SHA-256 e8acfc79438e87922f8fbbaf8b295b65cfc980ea4d523e8a3f85e315620c143b
-```
-
-Config chính:
-
-```text
-vllm/vllm-openai@sha256:3de11aaf1d2aa1c6245a93e9279cc10af6d0b9f5eb3b34704fbd099a8ac42c7d
---max-model-len=32768
---max-num-batched-tokens=2048
---gpu-memory-utilization=0.95
---enable-prefix-caching
---quantization=fp8
---mamba-ssm-cache-dtype=bfloat16
---language-model-only
-HF_HUB_OFFLINE=1
-TRANSFORMERS_OFFLINE=1
-```
-
-Kết quả portal:
-
-| Metric | Value |
-| --- | ---: |
-| `final_score` | **65.06** |
-| `ers` hiển thị | **65.06** |
-| ERS chuẩn hóa | **0.6506** |
-| `erc` | **1.000000** |
-| `passed_slo` | **120/120** |
-| `failed_count` | 0 |
-| `accuracy_drop` | 0 |
-| `penalty` | 1 |
-| `ttft_p50_ms` | 266 |
-| `ttft_p95_ms` | 1256 |
-| `tbt_median_ms` | 26 |
-| `warmup_count` | 0 |
-
-So với base 59.10:
-
-| Metric | 59.10 | 65.06 | Delta |
-| --- | ---: | ---: | ---: |
-| Score | 59.10 | **65.06** | +5.96 điểm / +10.08% |
-| ERC | 1.000000 | 1.000000 | giữ nguyên |
-| Passed SLO | 120 | 120 | giữ nguyên |
-| TTFT p50 | 521 | **266 ms** | tốt hơn 255 ms / 48.94% |
-| TTFT p95 | 1147 | **1256 ms** | xấu hơn 109 ms / 9.50% |
-| TBT median | 25 | **26 ms** | xấu hơn 1 ms / 4.00% |
-
-Budget 2048 là fairness/median win lớn: p50 gần giảm một nửa và score +5.96, dù scheduler
-overhead làm TBT và p95 xấu nhẹ. Điều này chứng minh score hiện còn nhạy mạnh với TTFT của
-phần lớn request hơn là một điểm TBT. Bước kế tiếp giảm budget xuống 1024 để đo frontier
-dứt khoát; không dùng 1536 trước khi biết hướng 1024 vì phép đo giữa điểm không xác định
-được còn upside lớn hay đã vượt optimum.
-
-## 2. Hình Dạng Workload Thật
-
-Trace gồm 120 request, tổ chức thành 20 conversation và 6 turn:
-
-```text
-t=0s:   20 request, 2 messages
-t=5s:   20 request, 4 messages
-t=10s:  20 request, 6 messages
-t=15s:  20 request, 8 messages
-t=20s:  20 request, 10 messages
-t=25s:  20 request, 12 messages
-```
-
-Trong mỗi burst, request đến cách nhau 25 ms và burst kéo dài 475 ms. Mỗi turn sau giữ
-nguyên toàn bộ conversation prefix của turn trước. Toàn bộ 120 request còn có chung một
-system prefix dài khoảng 6,396 token.
-
-Ở base 17.80, TBT median 51 ms làm một generation 200 token mất xấp xỉ 10 giây, khiến nhiều
-turn chồng lên nhau và tạo TTFT tail 8.3 giây. Base 65.06 có TBT 26 ms, tương đương khoảng
-5.2 giây cho 200 token, hơi dài hơn khoảng cách giữa hai burst. Dù vậy budget 2048 kéo TTFT
-p50 xuống 266 ms; p95 1256 ms cho thấy một nhóm tail vẫn chịu overlap giữa decode turn trước
-và prefill turn kế tiếp.
-
-## 3. Default Thật Của vLLM 0.22.1
-
-Các config cũ gọi bản không có `--enable-chunked-prefill` là "không chunked". Cách gọi đó
-sai với vLLM V1:
-
-- Qwen3.5 hỗ trợ chunked prefill nên vLLM bật mặc định.
-- MIG 18 GB nằm dưới nhánh GPU 70 GiB, nên OpenAI API server mặc định dùng
-  `max_num_batched_tokens=2048`.
-- Default `max_num_seqs=256`, nhưng số sequence được admit thực tế còn bị giới hạn bởi
-  cache capacity và `scheduler_reserve_full_isl`.
-- Async scheduling cũng tự bật khi config không có tính năng xung đột.
-
-Nguồn implementation:
-
-- `vllm/engine/arg_utils.py` tag `v0.22.1`
-- `vllm/config/scheduler.py` tag `v0.22.1`
-- <https://docs.vllm.ai/en/v0.22.0/configuration/engine_args/>
-
-Hệ quả: các base vLLM không đặt explicit budget đã chunk prompt 13k–27k thành khoảng 7–14
-scheduler step với budget mặc định 2048. Không cần thêm `--enable-chunked-prefill` vào
-compose.
-
-## 4. Qwen3.5 Không Phải Transformer Attention Thuần
-
-Qwen3.5-2B có 24 decoder layer nhưng chỉ 6 layer full attention; 18 layer còn lại dùng
-Gated DeltaNet/linear attention. Model config còn đặt SSM state dtype mặc định là
-`float32`.
-
-Nguồn:
-
-- <https://huggingface.co/Qwen/Qwen3.5-2B/blob/main/config.json>
-- `vllm/model_executor/models/qwen3_5.py` tag `v0.22.1`
-
-Điều này thay đổi thứ tự tối ưu:
-
-1. FP8 KV chỉ tác động trực tiếp tới 6 full-attention layer, không phải toàn bộ 24 layer.
-2. GDN/Mamba state có thể là nguồn memory bandwidth đáng kể trong decode.
-3. Portal đã xác nhận `--mamba-ssm-cache-dtype=bfloat16` là đòn lớn: TBT 51 -> 22 ms,
-   score 17.80 -> 47.52 và accuracy drop vẫn bằng 0.
-
-## 5. Diễn Giải Lại Thất Bại 8192
-
-Lượt 3.79 đã thêm explicit chunked prefill và đặt `max-num-batched-tokens=8192`. Thay đổi
-thật so với default không phải "bật chunked", mà chủ yếu là tăng token budget từ khoảng
-2048 lên 8192.
-
-Qwen3.5 dùng Mamba prefix cache mode `align`. Audit sâu hơn source vLLM `0.22.1` sửa lại
-kết luận boundary cũ:
-
-- `_mamba_block_aligned_split` căn theo physical cache block, mặc định 16 token, không căn
-  trực tiếp theo `max_num_batched_tokens`.
-- Common prefix 6396 token có last cache-aligned position 6384.
-- Nếu một scheduled chunk định đi qua 6384, scheduler tự cắt chunk tại 6384. Vì vậy budget
-  8192 không thực sự buộc Mamba state vượt vào divergent user tokens trong cùng chunk.
-- Kết quả 2048 -> 3072 xác nhận trade-off thật: budget lớn hơn làm TBT 22 -> 21 ms nhưng
-  TTFT p50/p95 xấu 8.5%/22.4%. Đây là prefill monopolization đổi lấy batch/decode efficiency.
-
-Kết luận hiện tại: không quay lại 6144/8192. Lập luận “8192 phá prefix vì crossing 6396”
-đã bị loại khỏi finding canonical.
-
-## 6. Trạng Thái Repo Và Chính Sách Nộp
-
-Root `docker-compose.yml` hiện là candidate v0.25.0 đã loại bỏ `torchcodec` lỗi ở build time:
-
-```text
-configs/vllm/submission-v025-no-torchcodec.compose.yml
-SHA-256 518983e99fa58b3302884598627f7a85853a7b024cfe8214be7db71e2429d491
-```
-
-Image public mới kế thừa đúng official v0.25.0 CUDA 12.9 digest và chỉ chạy
-`python3 -m pip uninstall -y torchcodec` trong Docker build. Build amd64 GitHub Actions run
-`29310933688` đã import `torch`, `vllm`, `vllm.multimodal.video`, xác nhận CUDA 12.9/vLLM
-0.25.0 và chạy đúng API-server module path qua điểm lỗi TorchCodec; job chỉ chấp nhận lỗi
-device inference do hosted runner không có GPU rồi mới push digest:
-
-```text
-ghcr.io/tanphong-sudo/qwen35-adaptive@sha256:a80e8468a978aba2e39ebb3dfa18d858fc3af3cefa17619736cd2852947c7c11
-```
-
-Manifest anonymous/public là linux/amd64, 11,765,413,256 compressed bytes, CUDA 12.9.1.
-Candidate giữ nguyên toàn bộ config score 65.06 ngoài image và giữ upside Model Runner V2.
-
-Best rollback vẫn là:
-
-```text
-configs/vllm/submission-score-65_06.compose.yml
-SHA-256 e8acfc79438e87922f8fbbaf8b295b65cfc980ea4d523e8a3f85e315620c143b
-```
-
-Official v0.25.0 CUDA 12.9 đã boot-fail trước ready vì `torchcodec` liên kết
-`libnvrtc.so.13`. Snapshot trực tiếp thất bại được giữ để không lặp lại:
-
-```text
-configs/vllm/submission-v025-upgrade.compose.yml
-SHA-256 00a1deac0def9ce1be9e4a5e6bea7d7348582f0a7730e9aae04774c022460ac1
-```
-
-Hai artifact SGLang liên tiếp đều bị runner chạy cố định
-`python3 -m vllm.entrypoints.openai.api_server`, bất kể artifact dùng explicit SGLang
-`entrypoint` hay command-only. Vì image SGLang không chứa module vLLM nên cả hai lượt đều
-exit 1 trước ready và không có metric. Direct backend switch bằng compose đã đóng.
-
-Hai snapshot boot-fail được giữ để không lặp lại:
-
-```text
-configs/sglang/submission-backend-ab.compose.yml
-SHA-256 02f8f6e032f2c127d54104302bc10a7bcd4daf6845e5809851a588fe1adbe5a4
-configs/sglang/submission-backend-ab-command-only.compose.yml
-SHA-256 096560d7c47fa78247ca65b3bcaf7e888942f41001b6701176097350dda0f0bd
-```
-
-Base 47.52 vẫn được giữ để tách tác động của budget 3072:
-
-```text
-configs/vllm/submission-score-47_52.compose.yml
-SHA-256 06837f0546bf04b31e5e3cc5397db9a2e6155dc7d85cfa9f48e173c6855a248f
-```
-
-Một candidate chỉ được chuyển sang root khi đã qua review theo tracker bên dưới. Chính sách
-mới nhằm tránh tiêu lượt portal cho micro-tuning:
-
-- Không nộp candidate có expected upside dưới khoảng **1 điểm**.
-- Ưu tiên candidate có plausible upside **3 điểm trở lên** hoặc phép A/B backend có thể
-  nâng performance ceiling.
-- Chỉ bundle các thay đổi cùng phục vụ một giả thuyết kỹ thuật và không thể đánh giá hợp lý
-  khi tách rời.
-- `failed_count > 0` hoặc `penalty < 1` là hard rollback. Portal hiển thị accuracy drop theo
-  điểm phần trăm; chỉ dùng `penalty` và free gate 10 điểm phần trăm để quyết định, không so
-  trực tiếp số hiển thị với `0.10`.
-- Một kết quả chỉ được promote thành base khi score tăng ít nhất **1.00 điểm**, không có
-  failure và penalty vẫn bằng 1. Win nhỏ hơn vẫn được ghi vào history nhưng không làm root
-  phình thêm flag.
-- Mọi bản đã score phải có snapshot và hash trước khi sửa root.
-
-## 7. Submission Tracker Đã Review
-
-Trạng thái dùng trong bảng:
-
-- `completed`: portal đã trả metric.
-- `boot-failed`: container chưa ready nên không có metric.
-- `local-prototype`: code và unit tests đã sẵn sàng nhưng image public/smoke test chưa qua.
-- `ready`: artifact đã được đặt vào root, validate xong và đang chờ upload/kết quả portal.
-- `planned`: candidate tiếp theo đủ upside để chuẩn bị, nhưng chưa được đặt vào root.
-- `conditional`: chỉ được chuẩn bị khi trigger ở cột quyết định xảy ra.
-- `canceled`: không nộp vì risk/reward không đạt chính sách.
-
-### 7.1 Ground Truth Và Candidate Đã Hủy
-
-| ID | Status | Config/package | Hypothesis | Metric signature | Promote gate | Quyết định tiếp theo |
-| --- | --- | --- | --- | --- | --- | --- |
-| `BASE-65.06` | `completed` | vLLM v0.24.0, budget 2048; snapshot `submission-score-65_06.compose.yml`; SHA-256 `e8acfc79438e87922f8fbbaf8b295b65cfc980ea4d523e8a3f85e315620c143b` | Best confirmed và rollback chuẩn | Score 65.06; TTFT 266/1256 ms; TBT 26 ms; ERC 1; 120 SLO; 0 failed | Current best | Candidate mới phải vượt 66.06, không failure và penalty 1 |
-| `BASE-59.10` | `completed` | vLLM v0.24.0, budget 3072 | Historical rollback trước budget retune | Score 59.10; TTFT 521/1147 ms; TBT 25 ms | Đã bị thay thế | Dùng để kết luận 2048 đổi 1 ms TBT và 109 ms p95 lấy 255 ms p50, net +5.96 |
-| `BASE-48.67` | `completed` | vLLM v0.22.1, budget 3072 | Historical rollback trước version upgrade | Score 48.67; TTFT 1870/2743 ms; TBT 21 ms; 0 failed | Đã bị thay thế | Dùng để tách tác động image v0.24.0: TTFT win rất lớn, TBT regression 4 ms |
-| `BASE-47.52` | `completed` | FP8 weight, prefix cache, BF16 GDN state, language-model-only, implicit budget 2048 | Historical rollback | Score 47.52; TTFT 1723/2241 ms; TBT 22 ms | Đã bị thay thế về score | Dùng để kết luận 3072 tăng decode efficiency nhưng làm TTFT xấu |
-| `BASE-17.80` | `completed` | FP8 weight + language-model-only, chưa BF16 GDN state | Historical rollback | Score 17.80; TTFT 614/8289 ms; TBT 51 ms | Đã bị thay thế | Chỉ dùng để đối chiếu tác động riêng của BF16 GDN state |
-| `EXP-CASCADE` | `canceled` | Thêm `--no-disable-cascade-attn` | Chỉ tối ưu 6 full-attention layer | Expected gain nhỏ, khó kéo TBT qua 45 ms | Không đạt submission policy | Không nộp lại nếu chưa có bằng chứng bottleneck chuyển sang full attention |
-| `SGLANG-ENTRYPOINT` | `boot-failed` | Snapshot `configs/sglang/submission-backend-ab.compose.yml`; SHA-256 `02f8f6e032f2c127d54104302bc10a7bcd4daf6845e5809851a588fe1adbe5a4`; explicit `entrypoint: python3 -m sglang.launch_server` | Đo backend ceiling | Pod chạy `/usr/bin/python3 -m vllm.entrypoints.openai.api_server` trong image SGLang và exit 1 vì không có module vLLM | Không có metric | Không thay performance flags; retry một lần bằng command-only để loại runner entrypoint mismatch |
-| `SGLANG-COMMAND` | `boot-failed` | Snapshot `configs/sglang/submission-backend-ab-command-only.compose.yml`; SHA-256 `096560d7c47fa78247ca65b3bcaf7e888942f41001b6701176097350dda0f0bd`; không override entrypoint | Kiểm tra runner chỉ giữ explicit entrypoint hay ép toàn bộ launch path | Pod vẫn chạy đúng module vLLM cũ và exit 1 | Không có metric | Xác nhận runner ép launch module; đóng direct SGLang compose branch và rollback 48.67 |
-
-### 7.2 Phase A — Phá Nút Thắt Decode, Mục Tiêu 20–30
-
-| ID | Status | Exact config delta/package | Hypothesis | Expected metric signature | Promote gate | Rollback/branch decision |
-| --- | --- | --- | --- | --- | --- | --- |
-| `V-GDN-BF16` | `completed` | Base 17.80 + `--mamba-ssm-cache-dtype=bfloat16`; snapshot `submission-score-47_52.compose.yml`; SHA-256 `06837f0546bf04b31e5e3cc5397db9a2e6155dc7d85cfa9f48e173c6855a248f` | Giảm footprint/bandwidth của SSM state trên 18/24 layer | Actual: score 47.52; TBT 22 ms; TTFT 1723/2241 ms; 0 failed; accuracy drop 0 | Vượt gate rất xa | Promote thành base. Decode phase hoàn tất; bottleneck chuyển sang TTFT/prefill |
-| `V-UPGRADE-0.24` | `completed` | Base 48.67, chỉ đổi image sang `vllm/vllm-openai@sha256:3de11aaf1d2aa1c6245a93e9279cc10af6d0b9f5eb3b34704fbd099a8ac42c7d`; snapshot `submission-score-59_10.compose.yml`; compose SHA-256 `b67e530b3ad40cc7a933f863574275ee21504162660e9f5080d94dbb9939c6c4` | Tối ưu Qwen3.5 GDN/hybrid cache/mixed scheduling của v0.24.0 nâng runtime ceiling | Actual: score 59.10; TTFT 521/1147 ms; TBT 25 ms; ERC 1; 120 SLO; accuracy drop 0 | Vượt gate +10.43 | Promote thành best. Giữ version; retune budget để lấy lại TBT |
-| `SGLANG-DIRECT` | `canceled` | Hai package upstream SGLang ở trên | Runner ép module path `vllm.entrypoints.openai.api_server` | Hai boot failure giống hệt nhau | Không thể đo metric | Không nộp thêm image SGLang upstream; backend switch chỉ quay lại qua compatibility image có module path vLLM |
-
-`V-GDN-BF16` đã hoàn thành Phase A và vượt thẳng mốc 30–50. Version v0.24 làm TBT quay lại
-25 ms, nên decode tuning chỉ được mở lại dưới dạng scheduler retune có kiểm soát.
-
-Hai boot failure không cung cấp bằng chứng hiệu năng SGLang; chúng chỉ chứng minh contract
-runner thực tế hẹp hơn contract compose giả định. Không tiêu lượt thứ ba cho upstream image.
-Version upgrade đã thắng lớn và xác nhận runner-compatible path có thể nâng ceiling. Không
-đổi image tiếp cho tới khi retune scheduler v0.24 xong.
-
-### 7.3 Phase B — Concurrency Shaping
-
-| ID | Status | Exact config delta/package | Hypothesis | Expected metric signature | Promote gate | Rollback/branch decision |
-| --- | --- | --- | --- | --- | --- | --- |
-| `WIN-SEQS20` | `completed` | Best 65.06 + `--max-num-seqs=20`; snapshot `configs/vllm/submission-score-54_56.compose.yml`; SHA-256 `aa8c5f7dadc7fb673149d51bbb15247ff4845ab70a1e1b477b11f8dde5330827` | Một burst active có thể giảm decode contention | Actual: score 54.56; TTFT 3499/3981 ms; TBT 18 ms; ERC 0.166667; 20 SLO | Thất bại -10.50 | Decode hypothesis đúng nhưng admission cap quá thấp: chỉ một burst qua SLO. Không thử 12/8 |
-| `WIN-SEQS40` | `completed` | Best 65.06 + `--max-num-seqs=40`; snapshot `configs/vllm/submission-score-63_89.compose.yml`; SHA-256 `71a2c1ae74186e88dcc3337ac212d4a6321631c48159e335d3e05e8a27e16317` | Hai-burst capacity có thể giữ decode gain cap20 mà bỏ queue | Actual: score 63.89; TTFT 292/1280 ms; TBT 26 ms; ERC 1; 120 SLO | Thất bại -1.17 | Cap40 loại queue nhưng không giữ bất kỳ decode gain nào. Rollback 65.06 và đóng toàn bộ fixed-cap tuning |
-| `WIN-SEQS12` | `canceled` | Hạ cap xuống 12 | Đổi throughput lấy TPOT | Quá thấp so với burst 20, dễ tạo queue TTFT | Không đạt submission policy | Không thử 12 hoặc 8 |
-| `WIN-GDN-PACKAGE` | `completed` | vLLM giữ `--mamba-ssm-cache-dtype=bfloat16` qua mọi promoted base | BF16 SSM state là điều kiện để tránh decode regression lớn | Base 65.06 vẫn dùng BF16 state, accuracy drop 0 | Đã chứng minh | Không sweep float16/float32; giữ BF16 cố định |
-
-Hai endpoint đã hoàn tất: cap20 cho decode 18 ms nhưng queue thảm họa; cap40 cho queue sạch
-nhưng TBT quay lại 26 ms. Fixed cap không tạo được điểm Pareto tốt hơn best, nên branch đóng;
-không thử 32/48/60/80. Evidence này trở thành input cho adaptive scheduler design.
-
-### 7.4 Phase C — Prefill/Prefix Và Cache, Mục Tiêu 50–70
-
-| ID | Status | Exact config delta/package | Hypothesis | Expected metric signature | Promote gate | Rollback/branch decision |
-| --- | --- | --- | --- | --- | --- | --- |
-| `V-PREFIX-3072` | `completed` | Base 47.52 + `--max-num-batched-tokens=3072`; snapshot `submission-score-48_67.compose.yml`; SHA-256 `dce4a164c29c25ff791cd2e6d42f32352d4d73d52355906d60c144f0a1962316` | Giảm scheduler steps và giữ boundary 6144 | Actual: score 48.67; TBT 21 ms; TTFT 1870/2743 ms; passed SLO 84 | Vượt gate +1.15 | Promote theo score, nhưng hypothesis TTFT thất bại; không tăng budget tiếp |
-| `V024-BUDGET-2048` | `completed` | Base 59.10, đổi `--max-num-batched-tokens=3072` -> `2048`; snapshot `configs/vllm/submission-score-65_06.compose.yml`; SHA-256 `e8acfc79438e87922f8fbbaf8b295b65cfc980ea4d523e8a3f85e315620c143b` | Chunk prefill nhỏ hơn tăng fairness và giảm TTFT median | Actual: score 65.06; TTFT 266/1256 ms; TBT 26 ms; 120 SLO; 0 failed | Vượt gate +5.96 | Promote. Xu hướng score vẫn tăng khi giảm budget; đo frontier 1024 trước concurrency |
-| `V024-BUDGET-1024` | `completed` | Best 65.06, đổi `--max-num-batched-tokens=2048` -> `1024`; snapshot `configs/vllm/submission-score-64_34.compose.yml`; SHA-256 `8aaf6a64f0669894a92203be9cb9329ac1dc33c423d20aff29f398fe8f163ed4` | Fair scheduling mạnh hơn có thể kéo TTFT gần floor | Actual: score 64.34; TTFT 277/1242 ms; TBT 27 ms; accuracy drop portal 3; penalty 1 | Thất bại -0.72 | Rollback 2048. Cả p50 và TBT xấu hơn nên 1024 đã vượt optimum; không thử budget thấp hơn hoặc 1536 |
-| `V-PREFIX-6144` | `canceled` | Tăng budget 3072 -> 6144 | Ban đầu nhằm cache gần trọn common prefix trong một step | 3072 đã làm TTFT p50/p95 xấu 8.5%/22.4% | Không còn plausible upside >=3 | Không nộp; dữ liệu cho thấy prefill monopolization tăng theo budget |
-| `V-KV-FP8` | `completed` | Base 48.67 + `--kv-cache-dtype=fp8 --calculate-kv-scales`; snapshot `configs/vllm/submission-score-28_18.compose.yml`; SHA-256 `08676e0bd197086fa356089bf99160ee898c21e9124fdfb75921a324a7074845` | FP8 KV có thể tăng admission/cache capacity và giảm TTFT | Actual: score 28.18; TTFT 1817/2105 ms; TBT 30 ms; failed 0; accuracy drop portal 2; penalty 1 | Thất bại rất xa | Hủy toàn bộ FP8 KV branch: TTFT tail tốt hơn nhưng TBT +9 ms xóa 20.49 điểm; không thử no-scale hoặc partial-layer |
-
-Độ nhạy dưới đây dùng công thức official trên một cặp latency đại diện, không phải dự báo
-score portal từ percentile:
-
-| TTFT đại diện | TPOT/TBT đại diện | Request score đại diện |
+# Current Findings — Reset 17/07/2026
+
+## 1. Trạng Thái Hiện Tại
+
+**Chưa có submission hợp lệ cho vòng mới. Không nộp root compose hiện tại.**
+
+Repo vẫn là workspace của vòng Qwen3.5 đã bị reset:
+
+| Artifact | Trạng thái |
+| --- | --- |
+| `docker-compose.yml` | Sai model (`Qwen3.5-2B`), dùng GHCR, chứa Qwen-only flags |
+| `input/docker-compose-baseline.yml` | Baseline cũ |
+| `input/trace-round1.jsonl` | Trace cũ 120 request, không phải trace mới 330 request |
+| `src/qwen35_serving_bench/scoring.py` | Bounds cũ TTFT 100–1500, TPOT 20–45 |
+| `configs/**` | Historical snapshots của leaderboard đã reset |
+| `custom_runtime/**` | Thử nghiệm Qwen cũ, không phải candidate mới |
+
+Best score vòng mới: **chưa có**. Mọi score 15–65, TTFT/TBT và SHA cũ không được dùng làm
+baseline, projection hoặc promote gate.
+
+## 2. Ground Truth Mới
+
+| Thuộc tính | Vòng reset |
+| --- | --- |
+| Model | `LiquidAI/LFM2.5-1.2B-Instruct` |
+| Framework | Chỉ vLLM |
+| Scored workload | 330 request; official text mô tả 70 multi-turn conversations |
+| Warm-up | 15 primer conversations, không tính điểm; quan hệ với tổng 70 cần trace xác nhận |
+| Input/output | Khoảng 4k input token, tối đa 200 output token |
+| Arrival | Poisson timeline deterministic |
+| Hardware | H200 MIG 18 GB, 3 CPU, 8 GB RAM |
+| Host | Ubuntu 24.04, driver 590.x, CUDA 13.x support |
+| Online metric | ERS, TTFT 10–400 ms và TPOT 1–10 ms |
+| Accuracy | Chỉ post-online trên tối đa 5 submissions tự chọn |
+| Registry contract | Public Docker Hub image, immutable digest |
+
+Public trace `trace_grading_public.jsonl` chưa có trong repo tại thời điểm reset. Không tối ưu
+scheduler, batching hoặc context length dựa trên `input/trace-round1.jsonl` cũ.
+
+## 3. Ý Nghĩa Của Scoring Mới
+
+Bounds mới khắt khe hơn rất nhiều; TPOT trên 10 ms nhận 0 cho nửa điểm decode và TTFT trên
+400 ms nhận 0 cho nửa điểm prefill/queue. Ví dụ nếu mọi request thành công:
+
+| TTFT | TPOT | Request score xấp xỉ |
 | ---: | ---: | ---: |
-| 266 ms | 26 ms | 67.73 |
-| 350 ms | 25 ms | 65.74 |
-| 400 ms | 24 ms | 66.15 |
-| 400 ms | 23 ms | 69.59 |
-| 500 ms | 23 ms | 64.23 |
-| 600 ms | 23 ms | 59.38 |
+| 200 ms | 5 ms | 28.58/100 |
+| 100 ms | 5 ms | 45.02/100 |
+| 100 ms | 3 ms | 59.83/100 |
+| 50 ms | 3 ms | 70.52/100 |
+| 25 ms | 2 ms | 85.73/100 |
+| 10 ms | 1 ms | 100/100 |
 
-Kết luận: budget optimum là 2048. Cap20 chứng minh TBT có thể xuống dưới floor nhưng một-burst
-capacity tạo queue thảm họa. Cap40 là candidate cuối của compose scheduler vì được suy ra từ
-completion time 7.08 giây và burst period 5 giây. Nếu cap40 không thắng, fixed-cap branch đóng;
-không nội suy thêm cap vì fixed admission không thể đồng thời tối ưu queue và decode.
+Vì hai component có trọng số ngang nhau, không thể bù một TPOT vượt ceiling chỉ bằng TTFT tốt
+hoặc ngược lại. Failure/timeout/0-token vẫn phá trực tiếp ERS.
 
-### 7.5 Phase D — Kernel/Runtime Ceiling, Mục Tiêu 70–90
+Primer 15 conversation làm warm state quan trọng: image/model load phải hoàn tất trước benchmark,
+nhưng cache/kernel warm-up trong primer có thể ảnh hưởng request được chấm. Phải tách metric primer
+và scored requests trong replay tooling mới.
 
-| ID | Status | Exact package | Hypothesis | Expected metric signature | Promote gate | Rollback/branch decision |
-| --- | --- | --- | --- | --- | --- | --- |
-| `CUSTOM-ADAPTIVE-SCHED` | `completed-failed` | Scored snapshot `configs/vllm/submission-score-49_12.compose.yml`; SHA-256 `54e27c29e647bc5b826da907d45572b90bda9faac90c1c544ce218a21e99e29e`; public image digest `sha256:8a18315745a39d54085e1d99bfbb7e5ae55e5b6fb320132c7261abfa4dfc18db`; completion cohort window 20 | Cho prefill/first-token chạy ngay rồi ưu tiên tối đa 20 mature decoder gần hoàn thành | Actual: score 49.12; TTFT 371/1212 ms; TBT 32 ms; ERC 1; 120 SLO; failed 0; accuracy drop 0 | Thất bại -15.94 so với best; TBT ngược mục tiêu +6 ms | First-token rồi starvation/time-slicing làm TPOT xấu. Rollback 65.06; đóng completion-cohort và mọi sweep decode-window/defer-step |
-| `CUSTOM-INFLIGHT-PREFIX` | `research-no-go` | Không tạo runtime. Source v0.24 xác nhận `max_num_partial_prefills=1`, concurrent partial prefill unsupported, RUNNING được schedule trước WAITING và hybrid coordinator đã có Marconi-style APC/block-aligned Mamba caching | Với budget 2048, một partial prefill leader giữ budget; follower chỉ được admit sau khi prefix blocks đã materialize. Custom hold/coalescing sẽ trùng admission order sẵn có thay vì giảm compute | Không có metric signature mới có thể chứng minh trước portal | Dừng trước build theo gate correctness/value | Không hardcode hoặc patch KV/GDN state khi không có compute gap. Re-open chỉ khi profiler/log chứng minh simultaneous duplicate prefill thực sự tồn tại |
-| `V024-CUDAGRAPH-COHORT20` | `completed-failed` | Scored snapshot `configs/vllm/submission-score-64_38.compose.yml`; SHA-256 `455add01996d671ef26d895ba862a934b4e6841210df263bcc487621785e4a8b`; giữ 51 default graph và thêm `20/60/100` | Default CUDA graph pad 20->24, 60->64, 100->104; hypothesis kỳ vọng exact cohort giảm decode padding | Actual: score 64.38; TTFT 264/1233 ms; TBT 27 ms; ERC 1; 120 SLO; failed 0; accuracy drop 0 | Thất bại -0.68; TBT ngược mục tiêu +1 ms | Padding graph không phải bottleneck. Rollback 65.06; đóng capture-size/performance-mode branch, không sweep thêm |
-| `MTP-1` | `research-no-go` | Qwen3.5-2B có một MTP layer và v0.24 nhận `method=mtp`, nhưng không tạo candidate | Upstream định vị MTP-1 cho low-concurrency latency, cảnh báo throughput thấp hơn dưới tải và recipe latency tắt prefix cache. Workload này burst 20, concurrency cao và phụ thuộc common-prefix cache dài | Expected signature không đủ đáng tin: decode có thể giảm nhưng TTFT/throughput/prefix reuse có nguy cơ xấu | Dừng trước build/submission theo gate workload fit | Không sweep speculative token/proposer. Chỉ re-open nếu local GPU replay cùng trace chứng minh score proxy >=68 và prefix cache vẫn hiệu quả |
-| `V025-VERSION-UPGRADE` | `boot-failed-closed` | Best 65.06 + chỉ đổi sang official v0.25.0 CUDA 12.9 amd64 digest `sha256:1a62fd4ad863259ec206e0d2b9fb24eb5d67b4deff87a1b2ae7889fc7f9ab23e`; snapshot `configs/vllm/submission-v025-upgrade.compose.yml`; compose SHA-256 `00a1deac0def9ce1be9e4a5e6bea7d7348582f0a7730e9aae04774c022460ac1` | Model Runner V2 và Qwen3.5 hybrid align cache có upside upstream | Actual: container exit 1 trước ready; `torchcodec` tìm `libnvrtc.so.13` trong image CUDA 12.9.1; không có metric | Fail deployment gate; không được tính là performance A/B | Rollback byte-identical 65.06. Chỉ mở lại khi có digest CUDA-consistent và local boot proof; không chữa package trực tiếp trên portal |
-| `V025-NO-TORCHCODEC` | `ready-to-submit` | Custom image `ghcr.io/tanphong-sudo/qwen35-adaptive@sha256:a80e8468a978aba2e39ebb3dfa18d858fc3af3cefa17619736cd2852947c7c11`; official v0.25 CUDA 12.9 base + chỉ uninstall optional broken `torchcodec`; snapshot `configs/vllm/submission-v025-no-torchcodec.compose.yml`; compose SHA-256 `518983e99fa58b3302884598627f7a85853a7b024cfe8214be7db71e2429d491` | Giữ Model Runner V2/hybrid align-prefix upside nhưng loại import crash không liên quan language-only workload | Build run 29310933688: exact amd64 build, import/video/API path smoke qua TorchCodec point, manifest public; projected performance giữ như v0.25 A/B | Nộp đúng root. Promote nếu score >=66.06, failed 0, penalty 1; strong win nếu TBT <=25 | Nếu còn boot/model-load failure thì đóng v0.25; nếu boot sạch nhưng score <=65.06 thì rollback và đóng performance branch |
-| `TRTLLM-CHECK` | `conditional` | Chỉ tạo candidate khi upstream TensorRT-LLM có Qwen3.5 dense hybrid/GDN support và OpenAI serving path tương thích | Engine compile/capture sâu hơn có thể nâng ceiling vượt vLLM/SGLang | Local boot và output contract sạch trước portal | Không nộp chỉ để kiểm tra support | Nếu thiếu GDN, prefix cache hoặc image public phù hợp CUDA 12.x: đóng nhánh |
+## 4. Những Finding Cũ Bị Loại
 
-### 7.6 Phase E — North Star 90–100
+Không mang sang vòng mới:
 
-Score 100 không phải mục tiêu có thể hứa bằng compose tuning. Theo công thức, nó đòi gần
-như mọi request có TTFT <=100 ms và TPOT <=20 ms. Với 20 prompt dài đến cùng lúc và các
-burst chồng nhau, mốc này cần thay đổi performance ceiling chứ không phải thêm flag.
+- “Budget 2048 là optimum”, fixed cohort 20, burst 6×20 và mọi kết luận từ trace 120 request.
+- Common prefix 6,396 token, Qwen chat lengths 12k–27k và max-model-len 32k vì workload cũ.
+- `--mamba-ssm-cache-dtype`, `--language-model-only`, Qwen GDN/Mamba/MTP findings.
+- FP8 accuracy observations trên Qwen hoặc portal accuracy drop cũ.
+- vLLM 0.24/0.25 performance projection cho Qwen3.5.
+- Các score 47.52, 59.10, 65.06 và mọi promote threshold dựa trên chúng.
+- GHCR package hiện tại; đề mới yêu cầu public Docker Hub.
 
-| Score band | Metric signature cần hướng tới | Loại công việc cần thiết |
-| --- | --- | --- |
-| 20–30 | Đã vượt | BF16 GDN state |
-| 30–50 | Đã vượt ở v0.22.1 | BF16 GDN state và initial batching |
-| 50–70 | **Best 65.06:** TBT 26/TTFT 266; direct v0.25 boot-fail đã được tách khỏi performance hypothesis | Candidate v0.25 no-TorchCodec đã qua remote amd64 import smoke; đo portal đúng một lần |
-| 70–80 | TBT 23–25 ms; TTFT p50 <200–300 ms, p95 <900–1300 ms | Nếu candidate boot sạch và thắng, audit MRV2 path rồi mới retune; nếu không thắng, chuyển profiler/kernel |
-| 80–90 | TBT 20–22 ms; TTFT p50 150–250 ms, p95 <600–1000 ms | A/B runtime/backend hoặc custom kernel có local trace replay; không dùng speculative decode khi chưa chứng minh throughput dưới burst load |
-| 90–100 | Hầu hết request sát TTFT 100 ms và TPOT 20 ms | Kernel fusion/runtime/backend hoặc scheduling+prefill change được profiler chứng minh; không thể đạt chỉ bằng compose và không hứa trước khi có compute breakdown |
+Các file snapshot có thể còn trong git để audit lịch sử nhưng không được nhắc như candidate canonical.
 
-Go/no-go cho engineering lớn:
+## 5. Bài Học Quy Trình Còn Dùng Được
 
-- Cap40 là submission compose cuối đã được duyệt trước custom engineering.
-- Không hardcode trace hay precompute output; tối ưu phải generic theo prefix/cache/scheduler.
-- Mỗi custom-runtime submission phải có expected upside tối thiểu 3 điểm vì cost build,
-  pull và boot cao hơn compose-only.
-- Thứ tự: cap40 thất bại -> adaptive thất bại -> prefix no-go -> CUDA graph thất bại -> MTP no-go -> direct v0.25 boot-fail -> sanitized v0.25 -> profiler/kernel candidate.
-- Mốc 100 là north star, không hứa bằng flag; mỗi phase phải vượt gate metric mới mở phase sau.
+Chỉ giữ các lesson không phụ thuộc model/trace:
 
-## 8. Gate Trước Và Sau Mỗi Submission
+1. Pin image digest; tag và metadata không thay thế exact image verification.
+2. Build `linux/amd64`, smoke-import đúng API module, kiểm tra public pull và Compose trước portal.
+3. Giữ entrypoint chính thức; runner trước đây từng override backend entrypoint nên backend switch
+   không được giả định chỉ từ Compose.
+4. Thay một package/biến mỗi experiment; snapshot root trước khi sửa.
+5. Không promote micro-change trong vùng noise. Tie-break chính thức đã coi 1–2 điểm là nhiễu.
+6. Concurrency cap, custom scheduler và CUDA graph micro-tuning có thể làm latency xấu; chỉ mở khi
+   trace/profiler mới chứng minh bottleneck tương ứng.
+7. Package optional bị broken vẫn có thể crash import toàn server; smoke test phải đi qua exact
+   `python3 -m vllm.entrypoints.openai.api_server` path.
+8. Không nộp rollback chỉ để lấy lại điểm: leaderboard giữ best lịch sử. Mỗi lượt portal phải là
+   candidate mới có hypothesis và expected metric signature rõ.
 
-### Trước khi nộp
+## 6. Migration Gate Trước Candidate Đầu Tiên
 
-```text
-1. Candidate có ID trong tracker và status planned.
-2. Expected upside >=1 điểm; ưu tiên >=3 điểm.
-3. Chỉ chứa delta/package đã review trong đúng row.
-4. docker compose config pass.
-5. Image/digest public, CUDA compatible, offline-safe.
-6. Root cũ đã có snapshot + SHA-256.
-7. Có sẵn lệnh rollback về best base.
-```
+- [ ] Lưu/verify `trace_grading_public.jsonl` mới.
+- [ ] Thay model và served name trong baseline/root Compose.
+- [ ] Chuyển image sang public Docker Hub digest.
+- [ ] Loại toàn bộ Qwen-only flags.
+- [ ] Cập nhật scorer constants: TTFT `10/400`, TPOT `1/10`, gamma `2`, weight `0.5`.
+- [ ] Cập nhật tests theo công thức mới.
+- [ ] Cập nhật replay để phân biệt primer conversations và 330 scored requests.
+- [ ] Phân tích arrival, turns, input/output token distributions từ trace mới.
+- [ ] Boot BF16 baseline, healthcheck và one-request streaming smoke.
+- [ ] Chạy local/proxy replay và lưu p50/p95 TTFT, mean/p50/p95 TPOT, failure count, ERS.
 
-### Sau khi portal trả metric
+Cho tới khi checklist này hoàn tất, không có file nào được gọi là “ready-to-submit”.
 
-```text
-failed_count > 0 hoặc penalty < 1
-  -> rollback ngay; không promote
+## 7. Lộ Trình Tối Ưu Mới
 
-accuracy drop portal > 10 điểm phần trăm
-  -> penalty phải được đối chiếu; không so số portal trực tiếp với 0.10
+### Phase A — Correct Baseline
 
-score >= best + 1.00, failed_count = 0, penalty = 1
-  -> snapshot, ghi history, promote thành base mới
+1. Bắt đầu từ image/sample vLLM `v0.22.1` chính thức và BF16.
+2. Giữ prefix caching như sample.
+3. Dùng `--max-model-len=32768` ở baseline đầu để giảm risk; chỉ hạ sau khi trace/tokenizer
+   chứng minh max total context và chat-template headroom.
+4. Ghi baseline ERS, p95 TTFT, TPOT và failures trước mọi tuning.
 
-best < score < best + 1.00
-  -> ghi history nhưng không promote; tránh tích lũy micro-flag
+### Phase B — Low-Risk Serving Knobs
 
-TBT giảm nhưng TTFT tăng
-  -> trade-off expected; chỉ promote nếu final score vẫn >= best + 1
+Sau khi có trace thật, A/B từng biến:
 
-failed/accuracy gate hỏng hoặc projected/actual score <65.06
-  -> rollback ngay về base 65.06
+- `max-num-batched-tokens` theo actual prefill/decode overlap.
+- `gpu-memory-utilization` với memory headroom đo được.
+- `max-model-len` 8k/16k chỉ khi total context được chứng minh an toàn.
+- Prefix caching on/off để đo multi-turn reuse thật.
+- CUDA graph/default batching chỉ khi profiler cho thấy launch/padding overhead.
 
-score không đổi trong noise
-  -> revert; không giữ flag chưa chứng minh giá trị
-```
+Không hardcode concurrency cap trước khi biết số conversation đồng thời theo timeline mới.
 
-## 9. Những Nhánh Không Tự Động Thử Lại
+### Phase C — Accuracy-Risk Candidates
 
-- Không thêm `--enable-chunked-prefill`: vLLM đã bật mặc định.
-- Không thêm `--async-scheduling`: vLLM đã tự bật trong config hiện tại.
-- Không quay lại batched-token budget 8192.
-- Không dùng concurrent partial prefill trên image đã báo unsupported.
-- Không dùng `--enforce-eager`: mất CUDA graphs.
-- Không đổi `stream-interval`: có thể làm sai latency streaming.
-- Không tăng `max-model-len`: 32768 đã cover max total 27598.
-- Không sweep `max-num-seqs=12/8`; cap 20 chỉ được thử một lần nếu budget 2048 chưa thắng.
-- Không coi FP8 KV là đòn decode chính vì chỉ 6/24 layer dùng full attention.
-- Không nộp MTP cho workload hiện tại nếu chưa có local GPU replay chứng minh throughput và
-  prefix-cache behavior dưới burst concurrency.
+- Online FP8 weight quantization.
+- FP8/INT8 KV cache nếu LFM + vLLM version hỗ trợ.
+- Speculative decoding chỉ khi proposer/model support và burst replay cho throughput tốt hơn.
 
-## 10. Evidence Đã Kiểm Tra Cho Roadmap
+Do GPQA chỉ chạy trên tối đa 5 bài sau vòng online, luôn giữ ít nhất một BF16 accuracy-safe
+submission trong finalist pool. Quantized candidate ERS cao không tự động thay thế BF16.
 
-- vLLM `v0.22.1` có `--mamba-ssm-cache-dtype`; Qwen3.5 mặc định đọc
-  `mamba_ssm_dtype` từ model config và cảnh báo khi override.
-- Official vLLM `v0.24.0` release có các thay đổi trực tiếp liên quan workload: fused
-  Qwen3.5 GDN QK-RMSNorm/RoPE/gate, cải thiện hybrid cache admission/prefix retention và
-  sửa mixed prefill+decode cho Qwen3.5. Đây là lý do version A/B có upside lớn hơn micro-flag.
-- Qwen3.5-2B khai báo một MTP layer và vLLM nhận `method=mtp`, nhưng upstream ghi rõ MTP
-  latency recipe nhắm low concurrency, có thể giảm throughput dưới tải và tắt prefix caching.
-  Vì trace thi burst 20 và phụ thuộc common-prefix cache dài, support kỹ thuật không đủ tạo
-  submission nếu chưa có local GPU replay chứng minh workload fit.
-- Official v0.25.0 CUDA 12.9 amd64 image digest là
-  `1a62fd4ad863259ec206e0d2b9fb24eb5d67b4deff87a1b2ae7889fc7f9ab23e`, build commit
-  `dd10e03f95f94edbea1975c67ace3a35ec9a8a40`, compressed 11.74 GB và khai báo CUDA
-  12.9.1. Portal boot ngày 14/07/2026 vẫn thất bại vì `torchcodec` load binary cần
-  `libnvrtc.so.13`; metadata image đúng không đủ thay thế dependency-level boot proof.
-- Qwen3.5 MRV2 align-prefix benchmark trên H20, common prefix 4096 và concurrency 16 cho
-  TPOT 10.33 -> 9.68 ms, ITL 21.32 -> 19.68 ms, throughput 2.90 -> 3.09 req/s trong khi
-  TTFT 174.91 -> 174.29 ms. Evidence performance vẫn hợp lệ về hypothesis nhưng bị chặn bởi
-  deployment gate; không được dùng để nộp lại cùng digest hoặc bypass thư viện mù.
-- Image `v0.24.0` được pin ở amd64 CUDA 12.9 manifest digest
-  `3de11aaf1d2aa1c6245a93e9279cc10af6d0b9f5eb3b34704fbd099a8ac42c7d`, build commit
-  `ee0da84ab9e04ac7610e28580af62c365e898389`; compressed size khoảng 11.31 GiB so với
-  8.59 GiB của v0.22.1. Boot risk tăng nhưng thấp hơn image SGLang 16.5 GiB đã pull được.
-- SGLang `v0.5.14` có built-in Qwen3.5, `--mamba-ssm-dtype`, `--language-only`, LPM,
-  chunked prefill, max-running-requests và online FP8 quantization.
-- Digest SGLang CUDA 12.9 trong tracker đã được Docker manifest xác nhận ngày 10/07/2026.
-- SGLang CUDA 12.9 runtime khoảng 16.5 GiB compressed; vLLM `v0.22.1` khoảng 8.6 GiB.
-  Đây là deployment risk thật, không phải performance metric.
-- Source SGLang Qwen3.5 vẫn construct vision model trong conditional-generation class;
-  vì vậy `--language-only` chưa được tính là memory win cho tới khi runtime measurement
-  chứng minh ngược lại.
+### Phase D — Runtime/Kernel Ceiling
 
-Nguồn implementation đã review:
+Chỉ mở sau profiler:
 
-- <https://github.com/vllm-project/vllm/blob/v0.22.1/vllm/model_executor/models/config.py>
-- <https://github.com/vllm-project/vllm/blob/v0.22.1/vllm/config/cache.py>
-- <https://github.com/vllm-project/vllm/releases/tag/v0.24.0>
-- <https://github.com/vllm-project/vllm/releases/tag/v0.25.0>
-- <https://github.com/vllm-project/vllm/pull/42406>
-- <https://github.com/vllm-project/vllm/pull/46609>
-- <https://github.com/vllm-project/vllm/issues/42338>
-- <https://docs.vllm.ai/en/v0.24.0/configuration/engine_args/>
-- <https://docs.vllm.ai/en/latest/features/speculative_decoding/mtp/>
-- <https://docs.vllm.ai/projects/recipes/en/latest/Qwen/Qwen3.5.html>
-- <https://huggingface.co/Qwen/Qwen3.5-2B/blob/main/config.json>
-- <https://github.com/sgl-project/sglang/blob/v0.5.14/python/sglang/srt/server_args.py>
-- <https://github.com/sgl-project/sglang/blob/v0.5.14/python/sglang/srt/models/qwen3_5.py>
-- <https://github.com/sgl-project/sglang/blob/v0.5.14/python/sglang/srt/models/qwen3_vl.py>
+- vLLM/CUDA 13 version A/B bằng exact Docker Hub digest.
+- FlashAttention/FlashInfer backend A/B.
+- Custom Triton/CUDA fusion hoặc scheduler.
+- Disaggregated prefill/decode nếu hợp lệ trên một MIG và có evidence rõ.
+
+Custom engineering phải có expected gain lớn hơn vùng noise 1–2 điểm và rollback sạch.
+
+## 8. Submission Và Finalist Policy
+
+Mỗi submission phải ghi:
+
+- Compose SHA-256 và image digest.
+- Exact hypothesis và chỉ một package thay đổi.
+- ERS, failed count, TTFT p50/p95, TPOT mean/p50/p95.
+- Primer behavior và 330 scored request count.
+- Expected accuracy risk: BF16 / weight quant / KV quant / speculative.
+- Promote, hold-for-finalist hoặc reject decision.
+
+Strong promote gate: ERS tăng ít nhất `0.02` (2 điểm trên thang 100) hoặc cải thiện tie-break rõ
+ràng mà không tăng failures. Thay đổi nhỏ hơn được ghi nhận nhưng không trở thành base mặc định.
+
+Duy trì tối đa năm loại finalist, không nhất thiết là năm ERS cao nhất tuyệt đối:
+
+1. BF16 accuracy-safe.
+2. Best overall ERS.
+3. Best p95 TTFT.
+4. Best generation speed/TPOT.
+5. Best quantized candidate có accuracy risk chấp nhận được.
+
+## 9. Candidate Tracker
+
+| ID | Status | Package | Gate trước portal |
+| --- | --- | --- | --- |
+| `NEW-BASELINE-BF16` | `blocked-on-migration` | Official vLLM baseline + LFM2.5, no Qwen flags | Trace/scorer migration, Docker Hub digest, local boot |
+| `CONTEXT-RIGHTSIZE` | `pending` | Baseline + one max-model-len change | Tokenizer-derived max context + headroom |
+| `BATCH-TOKEN-A/B` | `pending` | Baseline + one batching budget | New trace concurrency/prefill analysis |
+| `FP8-WEIGHT` | `pending` | Baseline + online FP8 | Clean ERS win; retain BF16 finalist |
+| `KV-CACHE-QUANT` | `pending` | Baseline + one KV dtype | LFM/vLLM support and memory measurement |
+| `RUNTIME-VERSION-A/B` | `pending` | Exact Docker Hub vLLM/CUDA version change | linux/amd64 import, boot and public pull proof |
+
+Immediate next step: migrate code and baseline, not tune the legacy Qwen compose.
